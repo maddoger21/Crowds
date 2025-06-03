@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Crowds</string>
+    <string name="create_post">Создать пост</string>
+    <string name="post_title_hint">Заголовок (тип ЧС / просьба)</string>
+    <string name="post_desc_hint">Описание</string>
+    <string name="btn_submit">Отправить</string>
+    <string name="hint_comment">Комментарий...</string>
+    <string name="btn_send">Отправить</string>
+</resources>
