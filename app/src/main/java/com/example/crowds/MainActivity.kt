@@ -32,11 +32,15 @@ import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.overlay.Marker
+import android.graphics.Color
+import org.osmdroid.views.overlay.Polygon
 
 class MainActivity : AppCompatActivity() {
 
     private val TAG = "MainActivity"
     private var isAdminUser = false
+
+    private var radiusCircle: org.osmdroid.views.overlay.Polygon? = null
 
     companion object {
         private const val REQUEST_PERMISSIONS_REQUEST_CODE = 1
@@ -140,6 +144,7 @@ class MainActivity : AppCompatActivity() {
                 userLocation = GeoPoint(loc.latitude, loc.longitude)
                 binding.mapView.controller.setCenter(userLocation)
                 addUserMarker()
+                drawUserRadius()
                 loadPostsFromFirestore()
             } else {
                 requestNewLocationData()
@@ -201,6 +206,7 @@ class MainActivity : AppCompatActivity() {
             val loc = result.lastLocation ?: return
             userLocation = GeoPoint(loc.latitude, loc.longitude)
             binding.mapView.controller.setCenter(userLocation)
+            drawUserRadius()
             loadPostsFromFirestore()
         }
     }
@@ -417,5 +423,29 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("Нет", null)
             .show()
     }
+
+    private fun drawUserRadius() {
+        val center = userLocation ?: return
+
+        // Если уже был круг, удаляем его
+        radiusCircle?.let { binding.mapView.overlays.remove(it) }
+
+        // Генерируем список точек круга радиусом RADIUS_KM километров
+        val circlePoints = Polygon.pointsAsCircle(center, RADIUS_KM * 1000.0)
+
+        // Создаём Polygon и настраиваем его
+        radiusCircle = Polygon().apply {
+            points = circlePoints
+            fillColor = Color.argb(50, 0, 0, 255)   // полупрозрачная заливка
+            strokeColor = Color.BLUE               // цвет обводки
+            strokeWidth = 2f                       // ширина обводки
+        }
+
+        // Добавляем круг на карту и перерисовываем
+        binding.mapView.overlays.add(radiusCircle)
+        binding.mapView.invalidate()
+    }
+
+
 }
 
