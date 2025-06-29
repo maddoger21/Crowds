@@ -151,12 +151,14 @@ class CreatePostActivity : AppCompatActivity() {
         val userName = firebaseUser?.displayName ?: "Anonymous"
 
         val newPost = Post().apply {
-            title = titleText
+            id          = ""
+            title       = titleText
             description = descText
-            latitude = selectedLocation!!.latitude
-            longitude = selectedLocation!!.longitude
+            latitude    = selectedLocation!!.latitude
+            longitude   = selectedLocation!!.longitude
             this.userName = userName
-            timestamp = Timestamp.now()
+            timestamp   = Timestamp.now()
+            status      = PostStatus.PENDING
         }
 
         postsCollection.add(newPost)

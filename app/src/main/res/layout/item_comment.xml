@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/ll_comment_item"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:padding="8dp">
 
+    <!-- Существующие поля -->
     <TextView
         android:id="@+id/tv_comment_user"
         android:layout_width="match_parent"
@@ -30,4 +32,16 @@
         android:text="10.04.2025 12:30"
         android:textSize="12sp"
         android:textColor="@android:color/darker_gray" />
+
+    <!-- Новая кнопка удаления -->
+    <ImageButton
+        android:id="@+id/btn_delete_comment"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:layout_gravity="end"
+        android:layout_marginTop="4dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/delete_comment"
+        android:src="@android:drawable/ic_menu_delete"
+        android:visibility="gone"/>
 </LinearLayout>
