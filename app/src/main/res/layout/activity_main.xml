@@ -26,6 +26,30 @@
         android:layout_height="match_parent"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
+        <LinearLayout
+            android:id="@+id/ll_radius_control"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="8dp"
+            android:background="@android:color/white"
+            android:elevation="4dp">
+
+            <TextView
+                android:id="@+id/tv_radius_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Радиус: 5 км"
+                android:textSize="14sp"/>
+
+            <SeekBar
+                android:id="@+id/seekbar_radius"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="20"
+                android:progress="5"/>
+        </LinearLayout>
+
         <!-- Внутри FrameLayout уже могут быть MapView, RecyclerView, FAB и т.д. -->
         <org.osmdroid.views.MapView
             android:id="@+id/mapView"

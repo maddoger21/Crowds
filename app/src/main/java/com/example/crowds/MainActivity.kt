@@ -33,6 +33,8 @@ import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.overlay.Marker
 import android.graphics.Color
+import android.widget.LinearLayout
+import android.widget.SeekBar
 import org.osmdroid.views.overlay.Polygon
 
 class MainActivity : AppCompatActivity() {
@@ -40,11 +42,15 @@ class MainActivity : AppCompatActivity() {
     private val TAG = "MainActivity"
     private var isAdminUser = false
 
-    private var radiusCircle: org.osmdroid.views.overlay.Polygon? = null
+    private var filterRadiusKm = 5.0
+    private var radiusCircle: Polygon? = null
+
+
+    // храним все посты из Firestore
+    private var lastPosts = listOf<Post>()
 
     companion object {
         private const val REQUEST_PERMISSIONS_REQUEST_CODE = 1
-        private const val RADIUS_KM = 5.0
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -107,6 +113,25 @@ class MainActivity : AppCompatActivity() {
         binding.fabCreatePost.setOnClickListener {
             startActivity(Intent(this, CreatePostActivity::class.java))
         }
+
+        // === Настраиваем ползунок ===
+        val ll = binding.root.findViewById<LinearLayout>(R.id.ll_radius_control)
+        val tvLabel = ll.findViewById<TextView>(R.id.tv_radius_label)
+        val sb = ll.findViewById<SeekBar>(R.id.seekbar_radius)
+
+        sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                // не ниже 1 км
+                filterRadiusKm = maxOf(1.0, progress.toDouble())
+                tvLabel.text = "Радиус: ${filterRadiusKm.toInt()} км"
+                drawUserRadius()
+                //loadPostsFromFirestore() // или заново прогнать ваш listener
+                refreshMarkers()
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar) {}
+        })
+
     }
 
     override fun onResume() {
@@ -139,13 +164,14 @@ class MainActivity : AppCompatActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
             != PackageManager.PERMISSION_GRANTED
         ) return
+        // Получаем и рисуем текущее местоположение + круг
         fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
             if (loc != null) {
                 userLocation = GeoPoint(loc.latitude, loc.longitude)
                 binding.mapView.controller.setCenter(userLocation)
                 addUserMarker()
                 drawUserRadius()
-                loadPostsFromFirestore()
+                //loadPostsFromFirestore()
             } else {
                 requestNewLocationData()
             }
@@ -155,22 +181,13 @@ class MainActivity : AppCompatActivity() {
             .orderBy("timestamp", Query.Direction.DESCENDING)
             .addSnapshotListener { snap, e ->
                 if (e != null || snap == null) return@addSnapshotListener
-                // достаём все посты, фильтруем по статусу/радиусу как раньше
-                val allPosts = snap.documents.mapNotNull { it.toObject(Post::class.java)?.apply { id = it.id } }
-                val toShow = if (isAdminUser) {
-                    allPosts
-                } else {
-                    allPosts.filter {
-                        it.status == PostStatus.APPROVED &&
-                                userLocation?.let { u ->
-                                    Utils.distanceKm(u.latitude, u.longitude, it.latitude, it.longitude) <= RADIUS_KM
-                                } ?: false
-                    }
-                }
-                // перерисовываем все маркеры
-                binding.mapView.overlays.removeIf { it is Marker && it.title != "Вы здесь" }
-                toShow.forEach { addPostMarker(it) }
-                binding.mapView.invalidate()
+
+                // сохраняем все посты
+                lastPosts = snap.documents
+                    .mapNotNull { it.toObject(Post::class.java)?.apply { id = it.id } }
+
+                // и перерисовываем
+                refreshMarkers()
             }
     }
 
@@ -207,7 +224,7 @@ class MainActivity : AppCompatActivity() {
             userLocation = GeoPoint(loc.latitude, loc.longitude)
             binding.mapView.controller.setCenter(userLocation)
             drawUserRadius()
-            loadPostsFromFirestore()
+            //loadPostsFromFirestore()
         }
     }
 
@@ -226,32 +243,38 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadPostsFromFirestore() {
-        if (isAdminUser) {
-            postsCollection.orderBy("timestamp", Query.Direction.DESCENDING)
-                .get().addOnSuccessListener { snap ->
-                    binding.mapView.overlays.removeIf { it is Marker && it.title != "Вы здесь" }
-                    snap.documents.mapNotNull { doc ->
-                        doc.toObject(Post::class.java)?.apply { id = doc.id }
-                    }.forEach { addPostMarker(it) }
-                    binding.mapView.invalidate()
-                }
-        } else {
-            postsCollection.whereEqualTo("status", PostStatus.APPROVED.name)
-                .orderBy("timestamp", Query.Direction.DESCENDING)
-                .get().addOnSuccessListener { snap ->
-                    binding.mapView.overlays.removeIf { it is Marker && it.title != "Вы здесь" }
-                    snap.documents.mapNotNull { doc ->
-                        doc.toObject(Post::class.java)?.apply { id = doc.id }
-                    }.filter { post ->
-                        userLocation?.let { u ->
-                            Utils.distanceKm(u.latitude, u.longitude, post.latitude, post.longitude) <= RADIUS_KM
-                        } ?: false
-                    }.forEach { addPostMarker(it) }
-                    binding.mapView.invalidate()
-                }
-        }
-    }
+//    private fun loadPostsFromFirestore() {
+//        if (isAdminUser) {
+//            postsCollection.orderBy("timestamp", Query.Direction.DESCENDING)
+//                .get().addOnSuccessListener { snap ->
+//                    binding.mapView.overlays.removeIf { it is Marker && it.title != "Вы здесь" }
+//                    snap.documents.mapNotNull { doc ->
+//                        doc.toObject(Post::class.java)?.apply { id = doc.id }
+//                    }.forEach { addPostMarker(it) }
+//                    binding.mapView.invalidate()
+//                }
+//        } else {
+//            postsCollection
+//                .whereEqualTo("status", PostStatus.APPROVED.name)
+//                .orderBy("timestamp", Query.Direction.DESCENDING)
+//                .get()
+//                .addOnSuccessListener { snap ->
+//                    binding.mapView.overlays.removeIf { it is Marker && it.title != "Вы здесь" }
+//                    snap.documents
+//                        .mapNotNull { it.toObject(Post::class.java)?.apply { id = it.id } }
+//                        .filter { post ->
+//                            userLocation?.let { u ->
+//                                Utils.distanceKm(
+//                                    u.latitude, u.longitude,
+//                                    post.latitude, post.longitude
+//                                ) <= filterRadiusKm
+//                            } ?: false
+//                        }
+//                        .forEach { addPostMarker(it) }
+//                    binding.mapView.invalidate()
+//                }
+//        }
+//    }
 
     private fun addPostMarker(post: Post) {
         Marker(binding.mapView).apply {
@@ -372,7 +395,7 @@ class MainActivity : AppCompatActivity() {
                         .addOnSuccessListener {
                             Toast.makeText(this, "Пост одобрен", Toast.LENGTH_SHORT).show()
                             post.status = PostStatus.APPROVED
-                            loadPostsFromFirestore()
+                            //loadPostsFromFirestore()
                             dialog.dismiss()
                         }
                 }
@@ -386,7 +409,7 @@ class MainActivity : AppCompatActivity() {
                 snap.documents.forEach { it.reference.delete() }
                 postsCollection.document(post.id).delete().addOnSuccessListener {
                     Toast.makeText(this, "Пост удалён", Toast.LENGTH_SHORT).show()
-                    loadPostsFromFirestore()
+                    //loadPostsFromFirestore()
                 }
             }
     }
@@ -424,25 +447,45 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    //общий метод перерисовки
+    private fun refreshMarkers() {
+        val center = userLocation
+        if (center == null) return
+
+        // фильтруем
+        val toShow = if (isAdminUser) {
+            lastPosts
+        } else {
+            lastPosts.filter { post ->
+                post.status == PostStatus.APPROVED &&
+                        Utils.distanceKm(center.latitude, center.longitude, post.latitude, post.longitude) <= filterRadiusKm
+            }
+        }
+
+        // убираем старые пост-маркеры
+        binding.mapView.overlays.removeIf { it is Marker && it.title != "Вы здесь" }
+
+        // добавляем новые
+        toShow.forEach { addPostMarker(it) }
+
+        binding.mapView.invalidate()
+    }
+
     private fun drawUserRadius() {
         val center = userLocation ?: return
 
-        // Если уже был круг, удаляем его
+        // удаляем старый круг
         radiusCircle?.let { binding.mapView.overlays.remove(it) }
 
-        // Генерируем список точек круга радиусом RADIUS_KM километров
-        val circlePoints = Polygon.pointsAsCircle(center, RADIUS_KM * 1000.0)
-
-        // Создаём Polygon и настраиваем его
+        val pts = Polygon.pointsAsCircle(center, filterRadiusKm * 1000.0)
         radiusCircle = Polygon().apply {
-            points = circlePoints
-            fillColor = Color.argb(50, 0, 0, 255)   // полупрозрачная заливка
-            strokeColor = Color.BLUE               // цвет обводки
-            strokeWidth = 2f                       // ширина обводки
+            points = pts
+            fillColor = Color.argb(50, 0, 0, 255)
+            strokeColor = Color.BLUE
+            strokeWidth = 2f
         }
 
-        // Добавляем круг на карту и перерисовываем
-        binding.mapView.overlays.add(radiusCircle)
+        binding.mapView.overlays.add(0, radiusCircle)
         binding.mapView.invalidate()
     }
 
