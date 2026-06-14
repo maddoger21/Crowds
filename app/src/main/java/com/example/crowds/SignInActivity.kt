@@ -2,6 +2,7 @@ package com.example.crowds
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 import com.firebase.ui.auth.AuthUI
 import com.firebase.ui.auth.FirebaseAuthUIActivityResultContract
@@ -12,6 +13,10 @@ import android.widget.Button
 import android.widget.Toast
 
 class SignInActivity : AppCompatActivity() {
+
+    private companion object {
+        const val TAG = "SignInActivity"
+    }
 
     // Регистрируем callback для FirebaseUI Auth
     private val signInLauncher =
@@ -40,7 +45,7 @@ class SignInActivity : AppCompatActivity() {
                 .createSignInIntentBuilder()
                 .setAvailableProviders(providers)
                 // Можно добавить стиль, логотип:
-                //.setIsSmartLockEnabled(false)
+                .setIsSmartLockEnabled(false)
                 .setLogo(R.mipmap.ic_launcher)
                 .build()
             signInLauncher.launch(signInIntent)
@@ -53,9 +58,33 @@ class SignInActivity : AppCompatActivity() {
             // Успешная аутентификация
             goToMain()
         } else {
-            // Неудача (можно вывести Toast или логику повторного показа)
-            // Например:
-            Toast.makeText(this, "Вход не выполнен", Toast.LENGTH_SHORT).show()
+            val error = response?.error
+            val errorCode = error?.errorCode
+            val errorMessage = error?.localizedMessage ?: error?.message
+            val signInErrorMessage = buildSignInErrorMessage(errorCode, errorMessage)
+            val logMessage = "Sign-in failed. resultCode=${result.resultCode}, " +
+                "errorCode=$errorCode, errorMessage=$errorMessage"
+
+            if (error != null) {
+                Log.e(TAG, logMessage, error)
+            } else {
+                Log.e(TAG, logMessage)
+            }
+
+            Toast.makeText(this, signInErrorMessage, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun buildSignInErrorMessage(errorCode: Int?, errorMessage: String?): String {
+        val details = listOfNotNull(
+            errorCode?.let { "код: $it" },
+            errorMessage?.takeIf { it.isNotBlank() }
+        ).joinToString(separator = ", ")
+
+        return if (details.isNotBlank()) {
+            "Вход не выполнен: $details"
+        } else {
+            "Вход не выполнен"
         }
     }
 
