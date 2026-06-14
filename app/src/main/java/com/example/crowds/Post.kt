@@ -3,7 +3,12 @@ package com.example.crowds
 import com.google.firebase.Timestamp
 
 
-enum class PostStatus { PENDING, APPROVED }
+enum class PostStatus {
+    PENDING,
+    APPROVED,
+    REJECTED,
+    ARCHIVED
+}
 
 enum class PostCategory(val displayName: String, val markerColor: Int, val markerIcon: Int) {
     FIRE(

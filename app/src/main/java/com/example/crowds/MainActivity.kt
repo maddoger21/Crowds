@@ -341,6 +341,8 @@ class MainActivity : AppCompatActivity() {
                 showEditPostDialog(post, view)
             }
         }
+        view.findViewById<Button>(R.id.btn_reject_post).visibility =
+            if (isAdminUser && post.status == PostStatus.PENDING) View.VISIBLE else View.GONE
 
         val rvComments = view.findViewById<RecyclerView>(R.id.rv_comments)
         rvComments.layoutManager = LinearLayoutManager(this)
@@ -442,6 +444,20 @@ class MainActivity : AppCompatActivity() {
         builder.setNeutralButton("Закрыть", null)
 
         val dialog = builder.create().apply { show() }
+
+        view.findViewById<Button>(R.id.btn_reject_post).setOnClickListener {
+            postsCollection.document(post.id)
+                .update("status", PostStatus.REJECTED.name)
+                .addOnSuccessListener {
+                    Toast.makeText(this, "Пост отклонён", Toast.LENGTH_SHORT).show()
+                    post.status = PostStatus.REJECTED
+                    dialog.dismiss()
+                }
+                .addOnFailureListener { e ->
+                    Toast.makeText(this, "Ошибка отклонения поста", Toast.LENGTH_SHORT).show()
+                    Log.e(TAG, "Post reject failed", e)
+                }
+        }
 
         // 6) Обработка "Одобрить"
         if (isAdminUser && post.status == PostStatus.PENDING) {

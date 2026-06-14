@@ -41,6 +41,14 @@
         android:text="@string/edit_post"
         android:visibility="gone" />
 
+    <Button
+        android:id="@+id/btn_reject_post"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/reject_post"
+        android:visibility="gone" />
+
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
