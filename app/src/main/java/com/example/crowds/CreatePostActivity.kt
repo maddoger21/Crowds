@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -88,9 +89,22 @@ class CreatePostActivity : AppCompatActivity() {
         mapView.overlays.add(MapEventsOverlay(eventsReceiver))
 
         // Обработка клика “Отправить”
+        setupCategorySpinner()
+
         binding.btnSubmit.setOnClickListener {
             createPost()
         }
+    }
+
+    private fun setupCategorySpinner() {
+        val adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            PostCategory.entries.map { it.displayName }
+        )
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        binding.spinnerCategory.adapter = adapter
+        binding.spinnerCategory.setSelection(PostCategory.OTHER.ordinal)
     }
 
     @SuppressLint("MissingPermission")
@@ -127,6 +141,7 @@ class CreatePostActivity : AppCompatActivity() {
     private fun createPost() {
         val titleText = binding.etTitle.text.toString().trim()
         val descText = binding.etDesc.text.toString().trim()
+        val category = PostCategory.fromPosition(binding.spinnerCategory.selectedItemPosition)
 
         // Валидация полей
         if (titleText.isEmpty()) {
@@ -149,13 +164,16 @@ class CreatePostActivity : AppCompatActivity() {
         // Получаем имя пользователя из Google-авторизации
         val firebaseUser = FirebaseAuth.getInstance().currentUser
         val userName = firebaseUser?.displayName ?: "Anonymous"
+        val authorUid = firebaseUser?.uid.orEmpty()
 
         val newPost = Post().apply {
             id          = ""
             title       = titleText
             description = descText
+            this.category = category
             latitude    = selectedLocation!!.latitude
             longitude   = selectedLocation!!.longitude
+            this.authorUid = authorUid
             this.userName = userName
             timestamp   = Timestamp.now()
             status      = PostStatus.PENDING

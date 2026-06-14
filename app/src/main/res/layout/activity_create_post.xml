@@ -40,6 +40,21 @@
                 android:inputType="text"/>
         </com.google.android.material.textfield.TextInputLayout>
 
+        <TextView
+            android:id="@+id/tv_category_label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/category_event_label"
+            android:textColor="@android:color/darker_gray"
+            android:textSize="14sp" />
+
+        <Spinner
+            android:id="@+id/spinner_category"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:prompt="@string/category_prompt" />
+
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/til_desc"
             style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"

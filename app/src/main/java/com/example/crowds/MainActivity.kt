@@ -8,12 +8,15 @@ import android.os.Bundle
 import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.Spinner
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -33,8 +36,10 @@ import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.overlay.Marker
 import android.graphics.Color
+import android.graphics.drawable.Drawable
 import android.widget.LinearLayout
 import android.widget.SeekBar
+import androidx.core.graphics.drawable.DrawableCompat
 import org.osmdroid.views.overlay.Polygon
 
 class MainActivity : AppCompatActivity() {
@@ -43,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     private var isAdminUser = false
 
     private var filterRadiusKm = 5.0
+    private var selectedCategoryFilter: PostCategory? = null
     private var radiusCircle: Polygon? = null
 
 
@@ -132,6 +138,34 @@ class MainActivity : AppCompatActivity() {
             override fun onStopTrackingTouch(seekBar: SeekBar) {}
         })
 
+        setupCategoryFilterSpinner()
+
+    }
+
+    private fun setupCategoryFilterSpinner() {
+        val categories = listOf("\u0412\u0441\u0435 \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u0438") +
+                PostCategory.entries.map { it.displayName }
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, categories)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        binding.spinnerCategoryFilter.adapter = adapter
+        binding.spinnerCategoryFilter.onItemSelectedListener =
+            object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(
+                    parent: AdapterView<*>?,
+                    view: View?,
+                    position: Int,
+                    id: Long
+                ) {
+                    selectedCategoryFilter =
+                        if (position == 0) null else PostCategory.fromPosition(position - 1)
+                    refreshMarkers()
+                }
+
+                override fun onNothingSelected(parent: AdapterView<*>?) {
+                    selectedCategoryFilter = null
+                    refreshMarkers()
+                }
+            }
     }
 
     override fun onResume() {
@@ -281,8 +315,8 @@ class MainActivity : AppCompatActivity() {
             position = GeoPoint(post.latitude, post.longitude)
             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
             title = post.title
-            snippet = post.description
-            icon = ContextCompat.getDrawable(this@MainActivity, android.R.drawable.ic_dialog_alert)
+            snippet = "${post.category.displayName}: ${post.description}"
+            icon = getMarkerIcon(post.category)
             setOnMarkerClickListener { _, _ ->
                 showPostDetailsDialog(post)
                 true
@@ -294,6 +328,19 @@ class MainActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.dialog_post_details, null)
         view.findViewById<TextView>(R.id.tv_post_title).text = post.title
         view.findViewById<TextView>(R.id.tv_post_desc).text  = post.description
+        view.findViewById<TextView>(R.id.tv_post_category).text =
+            "\u041a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044f: ${post.category.displayName}"
+        val currentUser = FirebaseAuth.getInstance().currentUser
+        val currentUserUid = currentUser?.uid.orEmpty()
+        val canManageOwnPost = post.authorUid.isNotBlank() && post.authorUid == currentUserUid
+        val canDeletePost = isAdminUser || canManageOwnPost
+
+        view.findViewById<Button>(R.id.btn_edit_post).apply {
+            visibility = if (canManageOwnPost) View.VISIBLE else View.GONE
+            setOnClickListener {
+                showEditPostDialog(post, view)
+            }
+        }
 
         val rvComments = view.findViewById<RecyclerView>(R.id.rv_comments)
         rvComments.layoutManager = LinearLayoutManager(this)
@@ -305,10 +352,14 @@ class MainActivity : AppCompatActivity() {
         lateinit var commentAdapter: CommentAdapter
 
         // 2) Адаптер объявляем заранее
-        commentAdapter = CommentAdapter(comments, isAdminUser) { commentToDelete ->
+        commentAdapter = CommentAdapter(comments, isAdminUser, currentUserUid) { commentToDelete ->
             // Защита от пустого id
             if (commentToDelete.id.isBlank()) {
                 Toast.makeText(this, "Нельзя удалить несохранённый комментарий", Toast.LENGTH_SHORT).show()
+                return@CommentAdapter
+            }
+            if (!canDeleteComment(commentToDelete, currentUserUid)) {
+                Toast.makeText(this, "Нет прав на удаление комментария", Toast.LENGTH_SHORT).show()
                 return@CommentAdapter
             }
             firestore.collection("posts")
@@ -353,8 +404,14 @@ class MainActivity : AppCompatActivity() {
             val et = view.findViewById<EditText>(R.id.et_comment)
             val text = et.text.toString().trim()
             if (text.isNotEmpty()) {
-                val name = FirebaseAuth.getInstance().currentUser?.displayName ?: "Anonymous"
-                val newComment = Comment(userName = name, text = text, timestamp = Timestamp.now())
+                val user = FirebaseAuth.getInstance().currentUser
+                val name = user?.displayName ?: "Anonymous"
+                val newComment = Comment(
+                    authorUid = user?.uid.orEmpty(),
+                    userName = name,
+                    text = text,
+                    timestamp = Timestamp.now()
+                )
                 firestore.collection("posts")
                     .document(post.id)
                     .collection("comments")
@@ -379,7 +436,7 @@ class MainActivity : AppCompatActivity() {
         if (isAdminUser && post.status == PostStatus.PENDING) {
             builder.setPositiveButton("Одобрить", null)
         }
-        if (isAdminUser) {
+        if (canDeletePost) {
             builder.setNegativeButton("Удалить") { _, _ -> deletePost(post) }
         }
         builder.setNeutralButton("Закрыть", null)
@@ -402,8 +459,97 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun canDeleteComment(comment: Comment, currentUserUid: String): Boolean =
+        isAdminUser || (comment.authorUid.isNotBlank() && comment.authorUid == currentUserUid)
+
+    private fun showEditPostDialog(post: Post, detailsView: View) {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 0)
+        }
+        val etTitle = EditText(this).apply {
+            hint = "Заголовок"
+            setText(post.title)
+        }
+        val etDesc = EditText(this).apply {
+            hint = "Описание"
+            setText(post.description)
+            minLines = 3
+        }
+        val categorySpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_item,
+                PostCategory.entries.map { it.displayName }
+            ).also {
+                it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            }
+            setSelection(post.category.ordinal)
+        }
+
+        container.addView(etTitle)
+        container.addView(etDesc)
+        container.addView(categorySpinner)
+
+        AlertDialog.Builder(this)
+            .setTitle("Редактирование поста")
+            .setView(container)
+            .setPositiveButton("Сохранить", null)
+            .setNegativeButton("Отмена", null)
+            .create()
+            .apply {
+                setOnShowListener {
+                    getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                        val title = etTitle.text.toString().trim()
+                        val description = etDesc.text.toString().trim()
+                        val category = PostCategory.fromPosition(categorySpinner.selectedItemPosition)
+                        if (title.isEmpty() || description.isEmpty()) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Заполните заголовок и описание",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            return@setOnClickListener
+                        }
+
+                        postsCollection.document(post.id)
+                            .update(
+                                mapOf(
+                                    "title" to title,
+                                    "description" to description,
+                                    "category" to category.name
+                                )
+                            )
+                            .addOnSuccessListener {
+                                post.title = title
+                                post.description = description
+                                post.category = category
+                                detailsView.findViewById<TextView>(R.id.tv_post_title).text = title
+                                detailsView.findViewById<TextView>(R.id.tv_post_desc).text = description
+                                detailsView.findViewById<TextView>(R.id.tv_post_category).text =
+                                    "\u041a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044f: ${category.displayName}"
+                                refreshMarkers()
+                                Toast.makeText(this@MainActivity, "Пост обновлён", Toast.LENGTH_SHORT).show()
+                                dismiss()
+                            }
+                            .addOnFailureListener { e ->
+                                Toast.makeText(this@MainActivity, "Ошибка обновления поста", Toast.LENGTH_SHORT).show()
+                                Log.e(TAG, "Post update failed", e)
+                            }
+                    }
+                }
+                show()
+            }
+    }
+
 
     private fun deletePost(post: Post) {
+        val currentUserUid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
+        val canDelete = isAdminUser || (post.authorUid.isNotBlank() && post.authorUid == currentUserUid)
+        if (!canDelete) {
+            Toast.makeText(this, "Нет прав на удаление поста", Toast.LENGTH_SHORT).show()
+            return
+        }
         postsCollection.document(post.id)
             .collection("comments").get().addOnSuccessListener { snap ->
                 snap.documents.forEach { it.reference.delete() }
@@ -453,7 +599,7 @@ class MainActivity : AppCompatActivity() {
         if (center == null) return
 
         // фильтруем
-        val toShow = if (isAdminUser) {
+        val postsByRole = if (isAdminUser) {
             lastPosts
         } else {
             lastPosts.filter { post ->
@@ -461,6 +607,9 @@ class MainActivity : AppCompatActivity() {
                         Utils.distanceKm(center.latitude, center.longitude, post.latitude, post.longitude) <= filterRadiusKm
             }
         }
+        val toShow = selectedCategoryFilter?.let { category ->
+            postsByRole.filter { it.category == category }
+        } ?: postsByRole
 
         // убираем старые пост-маркеры
         binding.mapView.overlays.removeIf { it is Marker && it.title != "Вы здесь" }
@@ -487,6 +636,13 @@ class MainActivity : AppCompatActivity() {
 
         binding.mapView.overlays.add(0, radiusCircle)
         binding.mapView.invalidate()
+    }
+
+    private fun getMarkerIcon(category: PostCategory): Drawable? {
+        val drawable = ContextCompat.getDrawable(this, category.markerIcon) ?: return null
+        val wrapped = DrawableCompat.wrap(drawable).mutate()
+        DrawableCompat.setTint(wrapped, category.markerColor)
+        return wrapped
     }
 
 

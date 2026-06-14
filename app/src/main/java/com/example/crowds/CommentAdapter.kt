@@ -6,12 +6,10 @@ import android.view.ViewGroup
 import android.widget.ImageButton
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
-import com.example.crowds.databinding.ItemCommentBinding
-import com.google.firebase.Timestamp
-
 class CommentAdapter(
     private val comments: MutableList<Comment>,
     private val isAdmin: Boolean,
+    private val currentUserUid: String,
     private val onDelete: (Comment) -> Unit
 ) : RecyclerView.Adapter<CommentAdapter.VH>() {
 
@@ -41,7 +39,8 @@ class CommentAdapter(
             ""
         }
 
-        if (isAdmin) {
+        val canDelete = isAdmin || (c.authorUid.isNotBlank() && c.authorUid == currentUserUid)
+        if (canDelete) {
             holder.btnDel.visibility = View.VISIBLE
             holder.btnDel.setOnClickListener {
                 onDelete(c)
