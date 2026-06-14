@@ -9,8 +9,15 @@
     <org.osmdroid.views.MapView
         android:id="@+id/mapPickerView"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        />
+        android:layout_height="match_parent" />
+
+    <Button
+        android:id="@+id/btn_back_create"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:elevation="8dp"
+        android:text="@string/back" />
 
     <!-- Полупрозрачный контейнер-снизу для ввода текста -->
     <LinearLayout

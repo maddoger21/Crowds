@@ -5,9 +5,10 @@ import com.google.firebase.Timestamp
 data class Comment(
     var id: String = "",
     var authorUid: String = "",
+    var authorEmail: String = "",
     var userName: String = "",
     var text: String = "",
     var timestamp: Timestamp? = null
 ) {
-    constructor() : this("", "", "", "", null)
+    constructor() : this("", "", "", "", "", null)
 }

@@ -7,6 +7,12 @@
     android:orientation="vertical"
     android:padding="16dp">
 
+    <Button
+        android:id="@+id/btn_close_post_details"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/back" />
+
     <!-- Заголовок поста -->
     <TextView
         android:id="@+id/tv_post_title"
@@ -32,6 +38,43 @@
         android:layout_marginTop="6dp"
         android:textColor="@android:color/darker_gray"
         android:textSize="14sp" />
+
+    <TextView
+        android:id="@+id/tv_post_meta"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textSize="14sp" />
+
+    <TextView
+        android:id="@+id/tv_post_trust"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textStyle="bold"
+        android:textSize="14sp" />
+
+    <TextView
+        android:id="@+id/tv_post_duplicates"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
+    <Button
+        android:id="@+id/btn_confirm_post"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/confirm_post" />
+
+    <Button
+        android:id="@+id/btn_report_post"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/report_post" />
 
     <Button
         android:id="@+id/btn_edit_post"

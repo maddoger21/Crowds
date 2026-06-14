@@ -45,6 +45,9 @@ enum class PostCategory(val displayName: String, val markerColor: Int, val marke
     companion object {
         fun fromPosition(position: Int): PostCategory =
             entries.getOrElse(position) { OTHER }
+
+        fun fromName(name: String?): PostCategory =
+            entries.firstOrNull { it.name == name || it.displayName == name } ?: OTHER
     }
 }
 
@@ -52,11 +55,21 @@ data class Post(
     var id: String = "",
     var title: String = "",
     var description: String = "",
-    var category: PostCategory = PostCategory.OTHER,
+    var category: String = PostCategory.OTHER.name,
     var latitude: Double = 0.0,
     var longitude: Double = 0.0,
     var authorUid: String = "",
+    var authorEmail: String = "",
     var userName: String = "",
     var timestamp: Timestamp? = null,
+    var confirmationsCount: Int = 0,
+    var reportsCount: Int = 0,
+    var duplicateCount: Int = 0,
+    var trustScore: Double = 0.0,
+    var trustLevel: String = "",
+    var duplicateCandidateIds: List<String> = emptyList(),
+    var needsAdminReview: Boolean = false,
     var status: PostStatus = PostStatus.PENDING
-)
+) {
+    fun categoryInfo(): PostCategory = PostCategory.fromName(category)
+}

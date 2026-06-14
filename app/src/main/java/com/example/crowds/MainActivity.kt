@@ -28,9 +28,12 @@ import com.example.crowds.databinding.ActivityMainBinding
 import com.google.android.gms.location.*
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -49,6 +52,7 @@ class MainActivity : AppCompatActivity() {
 
     private var filterRadiusKm = 5.0
     private var selectedCategoryFilter: PostCategory? = null
+    private var adminPostFilter: AdminPostFilter = AdminPostFilter.ALL
     private var radiusCircle: Polygon? = null
 
 
@@ -57,6 +61,12 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQUEST_PERMISSIONS_REQUEST_CODE = 1
+    }
+
+    private enum class AdminPostFilter(val displayName: String) {
+        ALL("Все посты"),
+        NEED_REVIEW("Требуют модерации"),
+        EXISTING("Существующие")
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -71,6 +81,9 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         setSupportActionBar(binding.toolbarMain)
+        binding.toolbarMain.setNavigationIcon(android.R.drawable.ic_media_previous)
+        binding.toolbarMain.setNavigationContentDescription(R.string.back)
+        binding.toolbarMain.setNavigationOnClickListener { finish() }
 
         val currentUser = FirebaseAuth.getInstance().currentUser
         if (currentUser == null) {
@@ -84,10 +97,11 @@ class MainActivity : AppCompatActivity() {
             .addOnSuccessListener { doc ->
                 isAdminUser = doc.exists()
                 Log.d(TAG, "isAdminUser=$isAdminUser for $email")
+                setupAdminFilterSpinner()
 
                 // --- Синхронизируем профиль в /users/{uid} ---
                 FirebaseAuth.getInstance().currentUser?.let { user ->
-                    syncUserProfile(user.uid, user.displayName ?: "Anonymous")
+                    syncUserProfile(user.uid, user.email.orEmpty(), user.displayName ?: "Anonymous")
                 }
                 // ----------------------------------------------
 
@@ -168,6 +182,38 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
+    private fun setupAdminFilterSpinner() {
+        binding.tvAdminFilterLabel.visibility = if (isAdminUser) View.VISIBLE else View.GONE
+        binding.spinnerAdminFilter.visibility = if (isAdminUser) View.VISIBLE else View.GONE
+        if (!isAdminUser) return
+
+        val adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            AdminPostFilter.entries.map { it.displayName }
+        )
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        binding.spinnerAdminFilter.adapter = adapter
+        binding.spinnerAdminFilter.setSelection(adminPostFilter.ordinal)
+        binding.spinnerAdminFilter.onItemSelectedListener =
+            object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(
+                    parent: AdapterView<*>?,
+                    view: View?,
+                    position: Int,
+                    id: Long
+                ) {
+                    adminPostFilter = AdminPostFilter.entries.getOrElse(position) { AdminPostFilter.ALL }
+                    refreshMarkers()
+                }
+
+                override fun onNothingSelected(parent: AdapterView<*>?) {
+                    adminPostFilter = AdminPostFilter.ALL
+                    refreshMarkers()
+                }
+            }
+    }
+
     override fun onResume() {
         super.onResume()
         binding.mapView.onResume()
@@ -240,15 +286,24 @@ class MainActivity : AppCompatActivity() {
         }
         fusedLocationClient.requestLocationUpdates(req, locationCallback, null)
     }
-    private fun syncUserProfile(uid: String, displayName: String) {
+    private fun syncUserProfile(uid: String, email: String, displayName: String) {
         val userDoc = firestore.collection("users").document(uid)
         userDoc.get().addOnSuccessListener { snap ->
-            if (!snap.exists()) {
-                val role = if (isAdminUser) UserRole.ADMIN else UserRole.USER
-                userDoc.set(AppUser(uid, displayName, role))
-            } else {
-                userDoc.update("role", if (isAdminUser) "ADMIN" else "USER")
-            }
+            val existing = snap.toObject(UserReputation::class.java)
+            userDoc.set(
+                mapOf(
+                    "uid" to uid,
+                    "email" to email,
+                    "displayName" to displayName,
+                    "name" to displayName,
+                    "role" to if (isAdminUser) "ADMIN" else "USER",
+                    "reputationScore" to (existing?.reputationScore ?: 5.0),
+                    "postsCreated" to (existing?.postsCreated ?: 0),
+                    "confirmationsMade" to (existing?.confirmationsMade ?: 0),
+                    "reportsMade" to (existing?.reportsMade ?: 0)
+                ),
+                SetOptions.merge()
+            )
         }
     }
 
@@ -311,12 +366,13 @@ class MainActivity : AppCompatActivity() {
 //    }
 
     private fun addPostMarker(post: Post) {
+        val category = post.categoryInfo()
         Marker(binding.mapView).apply {
             position = GeoPoint(post.latitude, post.longitude)
             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
             title = post.title
-            snippet = "${post.category.displayName}: ${post.description}"
-            icon = getMarkerIcon(post.category)
+            snippet = "${category.displayName}: ${post.description}"
+            icon = getMarkerIcon(category)
             setOnMarkerClickListener { _, _ ->
                 showPostDetailsDialog(post)
                 true
@@ -328,12 +384,28 @@ class MainActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.dialog_post_details, null)
         view.findViewById<TextView>(R.id.tv_post_title).text = post.title
         view.findViewById<TextView>(R.id.tv_post_desc).text  = post.description
+        updatePostTrustUi(view, post)
+        view.findViewById<TextView>(R.id.tv_post_meta).text = buildPostMeta(post)
         view.findViewById<TextView>(R.id.tv_post_category).text =
-            "\u041a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044f: ${post.category.displayName}"
+            "\u041a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044f: ${post.categoryInfo().displayName}"
         val currentUser = FirebaseAuth.getInstance().currentUser
         val currentUserUid = currentUser?.uid.orEmpty()
         val canManageOwnPost = post.authorUid.isNotBlank() && post.authorUid == currentUserUid
         val canDeletePost = isAdminUser || canManageOwnPost
+        val isOwnPost = post.authorUid.isNotBlank() && post.authorUid == currentUserUid
+
+        val btnConfirm = view.findViewById<Button>(R.id.btn_confirm_post)
+        val btnReport = view.findViewById<Button>(R.id.btn_report_post)
+        btnConfirm.isEnabled = !isOwnPost
+        btnReport.isEnabled = !isOwnPost
+        if (isOwnPost) {
+            btnConfirm.text = "Автор поста"
+            btnReport.text = "Автор поста"
+        } else {
+            checkUserFeedbackState(post.id, currentUserUid, btnConfirm, btnReport)
+        }
+        btnConfirm.setOnClickListener { confirmPost(post, view, btnConfirm, btnReport) }
+        btnReport.setOnClickListener { showReportReasonDialog(post, view, btnConfirm, btnReport) }
 
         view.findViewById<Button>(R.id.btn_edit_post).apply {
             visibility = if (canManageOwnPost) View.VISIBLE else View.GONE
@@ -378,7 +450,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 .addOnFailureListener { e ->
-                    Toast.makeText(this, "Ошибка удаления", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, firestoreErrorMessage("Ошибка удаления", e), Toast.LENGTH_LONG).show()
                     Log.e(TAG, "Delete comment failed", e)
                 }
         }
@@ -410,6 +482,7 @@ class MainActivity : AppCompatActivity() {
                 val name = user?.displayName ?: "Anonymous"
                 val newComment = Comment(
                     authorUid = user?.uid.orEmpty(),
+                    authorEmail = user?.email.orEmpty(),
                     userName = name,
                     text = text,
                     timestamp = Timestamp.now()
@@ -441,42 +514,348 @@ class MainActivity : AppCompatActivity() {
         if (canDeletePost) {
             builder.setNegativeButton("Удалить") { _, _ -> deletePost(post) }
         }
-        builder.setNeutralButton("Закрыть", null)
+        if (isAdminUser) {
+            builder.setNeutralButton("Архивировать", null)
+        } else {
+            builder.setNeutralButton("Закрыть", null)
+        }
 
         val dialog = builder.create().apply { show() }
+        view.findViewById<Button>(R.id.btn_close_post_details).setOnClickListener {
+            dialog.dismiss()
+        }
+
+        if (isAdminUser) {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+                ?.setOnClickListener {
+                    updatePostStatus(post, PostStatus.ARCHIVED) {
+                        Toast.makeText(this, "Пост архивирован", Toast.LENGTH_SHORT).show()
+                        dialog.dismiss()
+                    }
+                }
+        }
 
         view.findViewById<Button>(R.id.btn_reject_post).setOnClickListener {
-            postsCollection.document(post.id)
-                .update("status", PostStatus.REJECTED.name)
-                .addOnSuccessListener {
-                    Toast.makeText(this, "Пост отклонён", Toast.LENGTH_SHORT).show()
-                    post.status = PostStatus.REJECTED
-                    dialog.dismiss()
-                }
-                .addOnFailureListener { e ->
-                    Toast.makeText(this, "Ошибка отклонения поста", Toast.LENGTH_SHORT).show()
-                    Log.e(TAG, "Post reject failed", e)
-                }
+            updatePostStatus(post, PostStatus.REJECTED) {
+                Toast.makeText(this, "Пост отклонён", Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            }
         }
 
         // 6) Обработка "Одобрить"
         if (isAdminUser && post.status == PostStatus.PENDING) {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 ?.setOnClickListener {
-                    postsCollection.document(post.id)
-                        .update("status", PostStatus.APPROVED.name)
-                        .addOnSuccessListener {
-                            Toast.makeText(this, "Пост одобрен", Toast.LENGTH_SHORT).show()
-                            post.status = PostStatus.APPROVED
-                            //loadPostsFromFirestore()
-                            dialog.dismiss()
-                        }
+                    updatePostStatus(post, PostStatus.APPROVED) {
+                        Toast.makeText(this, "Пост одобрен", Toast.LENGTH_SHORT).show()
+                        dialog.dismiss()
+                    }
                 }
         }
     }
 
     private fun canDeleteComment(comment: Comment, currentUserUid: String): Boolean =
         isAdminUser || (comment.authorUid.isNotBlank() && comment.authorUid == currentUserUid)
+
+    private fun updatePostTrustUi(view: View, post: Post) {
+        view.findViewById<TextView>(R.id.tv_post_trust).text =
+            "Достоверность: ${"%.1f".format(post.trustScore)} (${post.trustLevel.ifBlank { "не рассчитана" }})"
+        view.findViewById<TextView>(R.id.tv_post_duplicates).apply {
+            visibility = if (post.duplicateCount > 0) View.VISIBLE else View.GONE
+            text = "Возможные дубли: ${post.duplicateCount}"
+        }
+    }
+
+    private fun buildPostMeta(post: Post): String {
+        val createdAt = post.timestamp?.toDate()?.let {
+            android.text.format.DateFormat.format("dd.MM.yyyy HH:mm", it)
+        } ?: "неизвестно"
+        return "Автор: ${post.userName}\n" +
+                "Дата: $createdAt\n" +
+                "Статус: ${post.status.name}\n" +
+                "Подтверждений: ${post.confirmationsCount}; жалоб: ${post.reportsCount}"
+    }
+
+    private fun checkUserFeedbackState(
+        postId: String,
+        currentUserUid: String,
+        btnConfirm: Button,
+        btnReport: Button
+    ) {
+        if (currentUserUid.isBlank()) {
+            btnConfirm.isEnabled = false
+            btnReport.isEnabled = false
+            return
+        }
+        postsCollection.document(postId)
+            .collection("confirmations")
+            .document(currentUserUid)
+            .get()
+            .addOnSuccessListener { snap ->
+                if (snap.exists()) {
+                    btnConfirm.isEnabled = false
+                    btnConfirm.text = "Вы подтвердили"
+                }
+            }
+        postsCollection.document(postId)
+            .collection("reports")
+            .document(currentUserUid)
+            .get()
+            .addOnSuccessListener { snap ->
+                if (snap.exists()) {
+                    btnReport.isEnabled = false
+                    btnReport.text = "Жалоба отправлена"
+                }
+            }
+    }
+
+    private fun confirmPost(post: Post, view: View, btnConfirm: Button, btnReport: Button) {
+        val user = FirebaseAuth.getInstance().currentUser
+        val uid = user?.uid.orEmpty()
+        if (uid.isBlank()) {
+            Toast.makeText(this, "Войдите в аккаунт", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (post.authorUid == uid) {
+            Toast.makeText(this, "Нельзя подтверждать свой пост", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val postRef = postsCollection.document(post.id)
+        val confirmationRef = postRef.collection("confirmations").document(uid)
+        val userRef = firestore.collection("users").document(uid)
+        firestore.runTransaction { tx ->
+            if (tx.get(confirmationRef).exists()) throw IllegalStateException("already_confirmed")
+
+            val current = tx.get(postRef).toObject(Post::class.java) ?: post
+            val confirmations = current.confirmationsCount + 1
+            val trust = calculateTrustForPost(
+                current.copy(confirmationsCount = confirmations),
+                5.0
+            )
+            tx.set(
+                confirmationRef,
+                PostConfirmation(uid, user?.email.orEmpty(), user?.displayName ?: "Anonymous", Timestamp.now())
+            )
+            tx.update(
+                postRef,
+                mapOf(
+                    "confirmationsCount" to confirmations,
+                    "trustScore" to trust.score,
+                    "trustLevel" to trust.level,
+                    "needsAdminReview" to shouldNeedAdminReview(current.reportsCount, trust.score)
+                )
+            )
+            trust
+        }.addOnSuccessListener { trust ->
+            incrementUserCounterBestEffort(
+                userRef,
+                user?.email.orEmpty(),
+                user?.displayName ?: "Anonymous",
+                "confirmationsMade"
+            )
+            post.confirmationsCount += 1
+            post.trustScore = trust.score
+            post.trustLevel = trust.level
+            post.needsAdminReview = shouldNeedAdminReview(post.reportsCount, trust.score)
+            updatePostTrustUi(view, post)
+            view.findViewById<TextView>(R.id.tv_post_meta).text = buildPostMeta(post)
+            btnConfirm.isEnabled = false
+            btnConfirm.text = "Вы подтвердили"
+            btnReport.isEnabled = true
+            Toast.makeText(this, "Подтверждение учтено", Toast.LENGTH_SHORT).show()
+        }.addOnFailureListener { e ->
+            val msg = if (e is IllegalStateException && e.message == "already_confirmed") {
+                "Вы уже подтверждали этот пост"
+            } else {
+                firestoreErrorMessage("Ошибка подтверждения", e)
+            }
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+            Log.e(TAG, "Confirm post failed", e)
+        }
+    }
+
+    private fun showReportReasonDialog(post: Post, view: View, btnConfirm: Button, btnReport: Button) {
+        val reasons = arrayOf(
+            "Недостоверная информация",
+            "Дубликат",
+            "Спам",
+            "Опасный/оскорбительный контент",
+            "Другое"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Причина жалобы")
+            .setItems(reasons) { _, which ->
+                reportPost(post, reasons[which], view, btnConfirm, btnReport)
+            }
+            .setNegativeButton("Назад", null)
+            .show()
+    }
+
+    private fun reportPost(
+        post: Post,
+        reason: String,
+        view: View,
+        btnConfirm: Button,
+        btnReport: Button
+    ) {
+        val user = FirebaseAuth.getInstance().currentUser
+        val uid = user?.uid.orEmpty()
+        if (uid.isBlank()) {
+            Toast.makeText(this, "Войдите в аккаунт", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (post.authorUid == uid) {
+            Toast.makeText(this, "Нельзя жаловаться на свой пост", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val postRef = postsCollection.document(post.id)
+        val reportRef = postRef.collection("reports").document(uid)
+        val userRef = firestore.collection("users").document(uid)
+        firestore.runTransaction { tx ->
+            if (tx.get(reportRef).exists()) throw IllegalStateException("already_reported")
+
+            val current = tx.get(postRef).toObject(Post::class.java) ?: post
+            val reports = current.reportsCount + 1
+            val trust = calculateTrustForPost(
+                current.copy(reportsCount = reports),
+                5.0
+            )
+            tx.set(
+                reportRef,
+                PostReport(uid, user?.email.orEmpty(), user?.displayName ?: "Anonymous", reason, Timestamp.now())
+            )
+            tx.update(
+                postRef,
+                mapOf(
+                    "reportsCount" to reports,
+                    "trustScore" to trust.score,
+                    "trustLevel" to trust.level,
+                    "needsAdminReview" to shouldNeedAdminReview(reports, trust.score)
+                )
+            )
+            trust
+        }.addOnSuccessListener { trust ->
+            incrementUserCounterBestEffort(
+                userRef,
+                user?.email.orEmpty(),
+                user?.displayName ?: "Anonymous",
+                "reportsMade"
+            )
+            post.reportsCount += 1
+            post.trustScore = trust.score
+            post.trustLevel = trust.level
+            post.needsAdminReview = shouldNeedAdminReview(post.reportsCount, trust.score)
+            updatePostTrustUi(view, post)
+            view.findViewById<TextView>(R.id.tv_post_meta).text = buildPostMeta(post)
+            btnReport.isEnabled = false
+            btnReport.text = "Жалоба отправлена"
+            btnConfirm.isEnabled = true
+            Toast.makeText(this, "Жалоба отправлена", Toast.LENGTH_SHORT).show()
+        }.addOnFailureListener { e ->
+            val msg = if (e is IllegalStateException && e.message == "already_reported") {
+                "Вы уже жаловались на этот пост"
+            } else {
+                firestoreErrorMessage("Ошибка отправки жалобы", e)
+            }
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+            Log.e(TAG, "Report post failed", e)
+        }
+    }
+
+    private fun calculateTrustForPost(post: Post, authorReputation: Double = 5.0): TrustResult {
+        val createdAt = post.timestamp?.toDate()?.time ?: System.currentTimeMillis()
+        return TrustScoreCalculator.calculateTrustScore(
+            status = post.status,
+            confirmationsCount = post.confirmationsCount,
+            reportsCount = post.reportsCount,
+            duplicateCount = post.duplicateCount,
+            authorReputation = authorReputation,
+            createdAt = createdAt
+        )
+    }
+
+    private fun shouldNeedAdminReview(reportsCount: Int, trustScore: Double): Boolean =
+        reportsCount >= 3 || trustScore < 30.0
+
+    private fun firestoreErrorMessage(prefix: String, error: Exception): String {
+        val code = (error as? FirebaseFirestoreException)?.code
+        return if (code != null) {
+            "$prefix: $code"
+        } else {
+            "$prefix: ${error.localizedMessage ?: error.message ?: "неизвестная ошибка"}"
+        }
+    }
+
+    private fun incrementUserCounterBestEffort(
+        userRef: com.google.firebase.firestore.DocumentReference,
+        email: String,
+        displayName: String,
+        counterField: String
+    ) {
+        userRef.set(
+            mapOf(
+                "email" to email,
+                "displayName" to displayName,
+                "reputationScore" to 5.0,
+                counterField to FieldValue.increment(1)
+            ),
+            SetOptions.merge()
+        ).addOnFailureListener { e ->
+            Log.w(TAG, "User reputation counter update failed: $counterField", e)
+        }
+    }
+
+    private fun updatePostStatus(post: Post, newStatus: PostStatus, onSuccess: () -> Unit) {
+        if (post.authorUid.isBlank()) {
+            updatePostStatusWithReputation(post, newStatus, 5.0, onSuccess)
+            return
+        }
+        firestore.collection("users").document(post.authorUid).get()
+            .addOnSuccessListener { userSnap ->
+                updatePostStatusWithReputation(
+                    post,
+                    newStatus,
+                    userSnap.getDouble("reputationScore") ?: 5.0,
+                    onSuccess
+                )
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "Author reputation load failed", e)
+                updatePostStatusWithReputation(post, newStatus, 5.0, onSuccess)
+            }
+    }
+
+    private fun updatePostStatusWithReputation(
+        post: Post,
+        newStatus: PostStatus,
+        authorReputation: Double,
+        onSuccess: () -> Unit
+    ) {
+        val trust = calculateTrustForPost(post.copy(status = newStatus), authorReputation)
+        postsCollection.document(post.id)
+            .update(
+                mapOf(
+                    "status" to newStatus.name,
+                    "trustScore" to trust.score,
+                    "trustLevel" to trust.level,
+                    "needsAdminReview" to shouldNeedAdminReview(post.reportsCount, trust.score)
+                )
+            )
+            .addOnSuccessListener {
+                post.status = newStatus
+                post.trustScore = trust.score
+                post.trustLevel = trust.level
+                post.needsAdminReview = shouldNeedAdminReview(post.reportsCount, trust.score)
+                refreshMarkers()
+                onSuccess()
+            }
+            .addOnFailureListener { e ->
+                Toast.makeText(this, "Ошибка изменения статуса", Toast.LENGTH_SHORT).show()
+                Log.e(TAG, "Post status update failed", e)
+            }
+    }
 
     private fun showEditPostDialog(post: Post, detailsView: View) {
         val container = LinearLayout(this).apply {
@@ -500,7 +879,7 @@ class MainActivity : AppCompatActivity() {
             ).also {
                 it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
             }
-            setSelection(post.category.ordinal)
+            setSelection(post.categoryInfo().ordinal)
         }
 
         container.addView(etTitle)
@@ -539,7 +918,7 @@ class MainActivity : AppCompatActivity() {
                             .addOnSuccessListener {
                                 post.title = title
                                 post.description = description
-                                post.category = category
+                                post.category = category.name
                                 detailsView.findViewById<TextView>(R.id.tv_post_title).text = title
                                 detailsView.findViewById<TextView>(R.id.tv_post_desc).text = description
                                 detailsView.findViewById<TextView>(R.id.tv_post_category).text =
@@ -616,7 +995,13 @@ class MainActivity : AppCompatActivity() {
 
         // фильтруем
         val postsByRole = if (isAdminUser) {
-            lastPosts
+            lastPosts.filter { post ->
+                when (adminPostFilter) {
+                    AdminPostFilter.ALL -> true
+                    AdminPostFilter.NEED_REVIEW -> needsModeratorAttention(post)
+                    AdminPostFilter.EXISTING -> post.status == PostStatus.APPROVED
+                }
+            }
         } else {
             lastPosts.filter { post ->
                 post.status == PostStatus.APPROVED &&
@@ -624,7 +1009,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         val toShow = selectedCategoryFilter?.let { category ->
-            postsByRole.filter { it.category == category }
+            postsByRole.filter { it.categoryInfo() == category }
         } ?: postsByRole
 
         // убираем старые пост-маркеры
@@ -635,6 +1020,12 @@ class MainActivity : AppCompatActivity() {
 
         binding.mapView.invalidate()
     }
+
+    private fun needsModeratorAttention(post: Post): Boolean =
+        post.status == PostStatus.PENDING ||
+                post.needsAdminReview ||
+                post.trustScore < 30.0 ||
+                post.reportsCount >= 3
 
     private fun drawUserRadius() {
         val center = userLocation ?: return

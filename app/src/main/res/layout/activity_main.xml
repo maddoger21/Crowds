@@ -62,6 +62,21 @@
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:prompt="@string/category_prompt" />
+
+            <TextView
+                android:id="@+id/tv_admin_filter_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/moderator_filter_label"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
+            <Spinner
+                android:id="@+id/spinner_admin_filter"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:visibility="gone" />
         </LinearLayout>
 
         <!-- Внутри FrameLayout уже могут быть MapView, RecyclerView, FAB и т.д. -->

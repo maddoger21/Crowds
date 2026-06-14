@@ -7,6 +7,13 @@
     android:layout_height="match_parent"
     android:padding="24dp">
 
+    <Button
+        android:id="@+id/btn_back_sign_in"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="24dp"
+        android:text="@string/back" />
+
     <!-- Здесь можно вывести лого или текст -->
     <TextView
         android:id="@+id/tv_welcome"

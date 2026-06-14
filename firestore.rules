@@ -1,0 +1,91 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/adminsByEmail/$(request.auth.token.email));
+    }
+
+    function isPostAuthor(postId) {
+      return signedIn() &&
+        get(/databases/$(database)/documents/posts/$(postId)).data.authorUid == request.auth.uid;
+    }
+
+    function onlyEngagementFieldsChanged() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly([
+          'confirmationsCount',
+          'reportsCount',
+          'trustScore',
+          'trustLevel',
+          'needsAdminReview'
+        ]);
+    }
+
+    match /adminsByEmail/{email} {
+      allow read: if signedIn() && request.auth.token.email == email;
+      allow write: if false;
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /posts/{postId} {
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+        && request.resource.data.authorUid == request.auth.uid;
+
+      allow update: if signedIn() && (
+        (
+          resource.data.authorUid == request.auth.uid
+          && request.resource.data.authorUid == resource.data.authorUid
+          && request.resource.data.status == resource.data.status
+        )
+        || onlyEngagementFieldsChanged()
+        || isAdmin()
+      );
+
+      allow delete: if signedIn() && (resource.data.authorUid == request.auth.uid || isAdmin());
+
+      match /comments/{commentId} {
+        allow read: if signedIn();
+        allow create: if signedIn()
+          && request.resource.data.authorUid == request.auth.uid;
+        allow update, delete: if signedIn() &&
+          (
+            resource.data.authorUid == request.auth.uid ||
+            resource.data.userUid == request.auth.uid ||
+            isAdmin()
+          );
+      }
+
+      match /confirmations/{uid} {
+        allow read: if signedIn();
+        allow create: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.userUid == request.auth.uid
+          && !isPostAuthor(postId);
+        allow update, delete: if false;
+      }
+
+      match /reports/{uid} {
+        allow read: if signedIn();
+        allow create: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.userUid == request.auth.uid
+          && !isPostAuthor(postId);
+        allow update, delete: if false;
+      }
+    }
+  }
+}
+
+// TODO: For production, replace adminsByEmail checks with Firebase Auth custom claims.

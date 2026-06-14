@@ -6,22 +6,27 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.ArrayAdapter
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.example.crowds.databinding.ActivityCreatePostBinding
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.MapEventsOverlay
+import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
+import java.util.Date
 
 class CreatePostActivity : AppCompatActivity() {
 
@@ -39,11 +44,9 @@ class CreatePostActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Инициализация ViewBinding
         binding = ActivityCreatePostBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Инициализация OsmDroid конфигурации
         Configuration.getInstance().load(
             applicationContext,
             androidx.preference.PreferenceManager.getDefaultSharedPreferences(applicationContext)
@@ -53,12 +56,8 @@ class CreatePostActivity : AppCompatActivity() {
         mapView.setTileSource(TileSourceFactory.MAPNIK)
         mapView.setMultiTouchControls(true)
         mapView.controller.setZoom(14.0)
+        mapView.controller.setCenter(GeoPoint(55.7558, 37.6173))
 
-        // Центр карты (дефолтное местоположение, например, Москва)
-        val defaultPoint = GeoPoint(55.7558, 37.6173)
-        mapView.controller.setCenter(defaultPoint)
-
-        // Запрос разрешений на локацию для отображения “Мое местоположение”
         if (ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.ACCESS_FINE_LOCATION
@@ -73,27 +72,19 @@ class CreatePostActivity : AppCompatActivity() {
             enableMyLocationOverlay()
         }
 
-        // Добавляем MapEventsOverlay, который перехватывает long-press
         val eventsReceiver = object : MapEventsReceiver {
-            override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
-                // Ничего не делаем при одиночном клике
-                return false
-            }
+            override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean = false
 
             override fun longPressHelper(p: GeoPoint): Boolean {
-                // При долгом нажатии ставим маркер
                 setSelectedPoint(p)
                 return true
             }
         }
         mapView.overlays.add(MapEventsOverlay(eventsReceiver))
 
-        // Обработка клика “Отправить”
         setupCategorySpinner()
-
-        binding.btnSubmit.setOnClickListener {
-            createPost()
-        }
+        binding.btnBackCreate.setOnClickListener { finish() }
+        binding.btnSubmit.setOnClickListener { createPost() }
     }
 
     private fun setupCategorySpinner() {
@@ -109,20 +100,25 @@ class CreatePostActivity : AppCompatActivity() {
 
     @SuppressLint("MissingPermission")
     private fun enableMyLocationOverlay() {
-        // Настраиваем провайдера и оверлей “Мое местоположение”
         val provider = GpsMyLocationProvider(this)
         val myLocationOverlay = MyLocationNewOverlay(provider, mapView)
         myLocationOverlay.enableMyLocation()
         mapView.overlays.add(myLocationOverlay)
+        myLocationOverlay.runOnFirstFix {
+            runOnUiThread {
+                myLocationOverlay.myLocation?.let { location ->
+                    mapView.controller.animateTo(location)
+                    mapView.controller.setZoom(16.0)
+                }
+            }
+        }
     }
 
     private fun setSelectedPoint(p: GeoPoint) {
-        // Удаляем предыдущие маркеры с title="Выбор"
         mapView.overlays
-            .filter { it is Marker && (it as Marker).title == "Выбор" }
+            .filter { it is Marker && it.title == "Выбор" }
             .forEach { mapView.overlays.remove(it) }
 
-        // Создаём новый маркер в выбранной точке
         val marker = Marker(mapView).apply {
             position = p
             title = "Выбор"
@@ -133,7 +129,6 @@ class CreatePostActivity : AppCompatActivity() {
         mapView.invalidate()
 
         selectedLocation = p
-        // Показываем координаты внизу
         binding.tvSelectedCoords.text =
             "Выбрано: ${"%.5f".format(p.latitude)}, ${"%.5f".format(p.longitude)}"
     }
@@ -143,7 +138,6 @@ class CreatePostActivity : AppCompatActivity() {
         val descText = binding.etDesc.text.toString().trim()
         val category = PostCategory.fromPosition(binding.spinnerCategory.selectedItemPosition)
 
-        // Валидация полей
         if (titleText.isEmpty()) {
             binding.tilTitle.error = "Введите заголовок"
             return
@@ -161,31 +155,123 @@ class CreatePostActivity : AppCompatActivity() {
             return
         }
 
-        // Получаем имя пользователя из Google-авторизации
-        val firebaseUser = FirebaseAuth.getInstance().currentUser
-        val userName = firebaseUser?.displayName ?: "Anonymous"
-        val authorUid = firebaseUser?.uid.orEmpty()
+        checkDuplicatesAndCreatePost(titleText, descText, category)
+    }
 
-        val newPost = Post().apply {
-            id          = ""
-            title       = titleText
-            description = descText
-            this.category = category
-            latitude    = selectedLocation!!.latitude
-            longitude   = selectedLocation!!.longitude
-            this.authorUid = authorUid
-            this.userName = userName
-            timestamp   = Timestamp.now()
-            status      = PostStatus.PENDING
+    private fun checkDuplicatesAndCreatePost(
+        titleText: String,
+        descText: String,
+        category: PostCategory
+    ) {
+        val threeHoursAgo = Timestamp(Date(System.currentTimeMillis() - 3 * 60 * 60 * 1000L))
+        postsCollection
+            .whereGreaterThanOrEqualTo("timestamp", threeHoursAgo)
+            .orderBy("timestamp", Query.Direction.DESCENDING)
+            .get()
+            .addOnSuccessListener { snap ->
+                val selected = selectedLocation ?: return@addOnSuccessListener
+                val recentPosts = snap.documents.mapNotNull { doc ->
+                    doc.toObject(Post::class.java)?.apply { id = doc.id }
+                }
+                val duplicateCandidateIds = DuplicateDetector.findDuplicateCandidateIds(
+                    selected.latitude,
+                    selected.longitude,
+                    recentPosts
+                )
+
+                if (duplicateCandidateIds.isNotEmpty()) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Возможный дубль")
+                        .setMessage("Поблизости уже есть похожее событие. Возможно, это дубль. Всё равно создать новое сообщение?")
+                        .setPositiveButton("Создать") { _, _ ->
+                            savePost(titleText, descText, category, duplicateCandidateIds)
+                        }
+                        .setNegativeButton("Отмена", null)
+                        .show()
+                } else {
+                    savePost(titleText, descText, category, duplicateCandidateIds)
+                }
+            }
+            .addOnFailureListener {
+                savePost(titleText, descText, category, emptyList())
+            }
+    }
+
+    private fun savePost(
+        titleText: String,
+        descText: String,
+        category: PostCategory,
+        duplicateCandidateIds: List<String>
+    ) {
+        val firebaseUser = FirebaseAuth.getInstance().currentUser
+        val authorUid = firebaseUser?.uid.orEmpty()
+        val authorEmail = firebaseUser?.email.orEmpty()
+        val userName = firebaseUser?.displayName ?: "Anonymous"
+
+        if (authorUid.isBlank()) {
+            Toast.makeText(this, "Не удалось определить пользователя", Toast.LENGTH_SHORT).show()
+            return
         }
 
-        postsCollection.add(newPost)
-            .addOnSuccessListener {
-                finish() // Закрываем Activity после успешного добавления
+        val userRef = firestore.collection("users").document(authorUid)
+        userRef.get()
+            .addOnSuccessListener { userSnap ->
+                val reputation = userSnap.toObject(UserReputation::class.java)
+                    ?: UserReputation(uid = authorUid, email = authorEmail, displayName = userName)
+                val now = Timestamp.now()
+                val trust = TrustScoreCalculator.calculateTrustScore(
+                    status = PostStatus.PENDING,
+                    confirmationsCount = 0,
+                    reportsCount = 0,
+                    duplicateCount = duplicateCandidateIds.size,
+                    authorReputation = reputation.reputationScore,
+                    createdAt = now.toDate().time
+                )
+                val selected = selectedLocation ?: return@addOnSuccessListener
+
+                val newPost = Post().apply {
+                    title = titleText
+                    description = descText
+                    this.category = category.name
+                    latitude = selected.latitude
+                    longitude = selected.longitude
+                    this.authorUid = authorUid
+                    this.authorEmail = authorEmail
+                    this.userName = userName
+                    timestamp = now
+                    confirmationsCount = 0
+                    reportsCount = 0
+                    duplicateCount = duplicateCandidateIds.size
+                    trustScore = trust.score
+                    trustLevel = trust.level
+                    this.duplicateCandidateIds = duplicateCandidateIds
+                    needsAdminReview = duplicateCandidateIds.isNotEmpty() || trust.score < 30.0
+                    status = PostStatus.PENDING
+                }
+
+                postsCollection.add(newPost)
+                    .addOnSuccessListener {
+                        userRef.set(
+                            mapOf(
+                                "uid" to authorUid,
+                                "email" to authorEmail,
+                                "displayName" to userName,
+                                "reputationScore" to reputation.reputationScore,
+                                "postsCreated" to FieldValue.increment(1),
+                                "confirmationsMade" to reputation.confirmationsMade,
+                                "reportsMade" to reputation.reportsMade
+                            ),
+                            SetOptions.merge()
+                        )
+                        finish()
+                    }
+                    .addOnFailureListener { e ->
+                        e.printStackTrace()
+                        Toast.makeText(this, "Ошибка при создании поста", Toast.LENGTH_SHORT).show()
+                    }
             }
-            .addOnFailureListener { e ->
-                e.printStackTrace()
-                Toast.makeText(this, "Ошибка при создании поста", Toast.LENGTH_SHORT).show()
+            .addOnFailureListener {
+                Toast.makeText(this, "Не удалось загрузить репутацию пользователя", Toast.LENGTH_SHORT).show()
             }
     }
 

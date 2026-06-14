@@ -7,9 +7,15 @@
     <string name="hint_comment">Комментарий...</string>
     <string name="btn_send">Отправить</string>
     <string name="delete_comment">Удалить комментарий</string>
+    <string name="confirm_post">Подтвердить</string>
+    <string name="report_post">Пожаловаться</string>
+    <string name="archive_post">Архивировать</string>
+    <string name="back">Назад</string>
+    <string name="close">Закрыть</string>
     <string name="edit_post">Редактировать пост</string>
     <string name="reject_post">Отклонить</string>
     <string name="category_prompt">&#1050;&#1072;&#1090;&#1077;&#1075;&#1086;&#1088;&#1080;&#1103;</string>
     <string name="category_event_label">&#1050;&#1072;&#1090;&#1077;&#1075;&#1086;&#1088;&#1080;&#1103; &#1089;&#1086;&#1073;&#1099;&#1090;&#1080;&#1103;</string>
     <string name="category_filter_label">&#1060;&#1080;&#1083;&#1100;&#1090;&#1088; &#1087;&#1086; &#1082;&#1072;&#1090;&#1077;&#1075;&#1086;&#1088;&#1080;&#1080;</string>
+    <string name="moderator_filter_label">Режим модератора</string>
 </resources>
